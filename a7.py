@@ -9,21 +9,11 @@ from snowflake.core import Root
 from typing import Any, Dict, List, Optional, Tuple
 import plotly.express as px
 import time
-import logging
 
-# Configure logging
-logging.basicConfig(level=logging.DEBUG)
-logger = logging.getLogger(__name__)
-
-# Snowflake/Cortex Configuration - Hardcoded Credentials
-SNOWFLAKE_USERNAME = "your_snowflake_username"  # Replace with your Snowflake username
-SNOWFLAKE_PASSWORD = "your_snowflake_password"  # Replace with your Snowflake password
-SNOWFLAKE_ACCOUNT = "gbjyvct-lsb50763"
-SNOWFLAKE_HOST = "gbjyvct-lsb50763.snowflakecomputing.com"
-SNOWFLAKE_WAREHOUSE = "COMPUTE_WH"
-SNOWFLAKE_ROLE = "ACCOUNTADMIN"
-SNOWFLAKE_DATABASE = "AI"
-SNOWFLAKE_SCHEMA = "DWH_MART"
+# Snowflake/Cortex Configuration
+HOST = "gbjyvct-lsb50763.snowflakecomputing.com"
+DATABASE = "AI"
+SCHEMA = "DWH_MART"
 API_ENDPOINT = "/api/v2/cortex/agent:run"
 API_TIMEOUT = 50000  # in milliseconds
 CORTEX_SEARCH_SERVICES = "PROC_SERVICE"
@@ -39,7 +29,7 @@ MODELS = [
 
 # Streamlit Page Config
 st.set_page_config(
-    page_title="Welcome to Snowflake Cortex AI Assistant",
+    page_title="Welcome to Cortex AI Assistant",
     layout="wide",
     initial_sidebar_state="auto"
 )
@@ -47,6 +37,8 @@ st.set_page_config(
 # Initialize session state
 if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
+    st.session_state.username = ""
+    st.session_state.password = ""
     st.session_state.CONN = None
     st.session_state.snowpark_session = None
     st.session_state.chat_history = []
@@ -93,9 +85,24 @@ st.markdown("""
     background-color: transparent !important;
     white-space: pre-wrap !important;
     word-wrap: break-word !important;
+    overflow: hidden !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    box-sizing: border-box !important;
+    padding: 10px !important; /* Add padding for readability */
 }
 [data-testid="stChatMessageContent"] {
     white-space: pre-wrap !important;
+    word-wrap: break-word !important;
+    overflow: hidden !important;
+    overflow-y: hidden !important; /* Explicitly disable vertical scrollbar */
+    width: 100% !important;
+    max-width: 100% !important;
+    height: auto !important; /* Allow container to expand vertically */
+    min-height: 20px !important; /* Ensure minimum height for short content */
+    box-sizing: border-box !important;
+    line-height: 1.5 !important; /* Improve readability of lists */
+    font-size: 16px !important; /* Consistent font size */
 }
 .copy-button, [data-testid="copy-button"], [title="Copy to clipboard"], [data-testid="stTextArea"] {
     display: none !important;
@@ -241,40 +248,39 @@ def create_prompt(user_question):
     """
     return complete(st.session_state.model_name, prompt)
 
-# Authentication using hardcoded credentials
 if not st.session_state.authenticated:
     st.title("Welcome to Snowflake Cortex AI")
-    st.write("Connecting to Snowflake...")
-    try:
-        logger.debug(f"Connecting to Snowflake with user={SNOWFLAKE_USERNAME}, account={SNOWFLAKE_ACCOUNT}, host={SNOWFLAKE_HOST}")
-        conn = snowflake.connector.connect(
-            user=SNOWFLAKE_USERNAME,
-            password=SNOWFLAKE_PASSWORD,
-            account=SNOWFLAKE_ACCOUNT,
-            host=SNOWFLAKE_HOST,
-            port=443,
-            warehouse=SNOWFLAKE_WAREHOUSE,
-            role=SNOWFLAKE_ROLE,
-            database=SNOWFLAKE_DATABASE,
-            schema=SNOWFLAKE_SCHEMA,
-            client_session_keep_alive=True
-        )
-        st.session_state.CONN = conn
-        snowpark_session = Session.builder.configs({
-            "connection": conn
-        }).create()
-        st.session_state.snowpark_session = snowpark_session
-        with conn.cursor() as cur:
-            cur.execute(f"USE DATABASE {SNOWFLAKE_DATABASE}")
-            cur.execute(f"USE SCHEMA {SNOWFLAKE_SCHEMA}")
-            cur.execute("ALTER SESSION SET TIMEZONE = 'UTC'")
-            cur.execute("ALTER SESSION SET QUOTED_IDENTIFIERS_IGNORE_CASE = TRUE")
-        st.session_state.authenticated = True
-        st.success("Authentication successful! Redirecting...")
-        st.rerun()
-    except Exception as e:
-        logger.error(f"Authentication failed: {str(e)}")
-        st.error(f"Authentication failed: {str(e)}")
+    st.write("Please login to interact with your data")
+    st.session_state.username = st.text_input("Enter Snowflake Username:", value=st.session_state.username)
+    st.session_state.password = st.text_input("Enter Password:", type="password")
+    if st.button("Login"):
+        try:
+            conn = snowflake.connector.connect(
+                user=st.session_state.username,
+                password=st.session_state.password,
+                account="gbjyvct-lsb50763",
+                host=HOST,
+                port=443,
+                warehouse="COMPUTE_WH",
+                role="ACCOUNTADMIN",
+                database=DATABASE,
+                schema=SCHEMA,
+            )
+            st.session_state.CONN = conn
+            snowpark_session = Session.builder.configs({
+                "connection": conn
+            }).create()
+            st.session_state.snowpark_session = snowpark_session
+            with conn.cursor() as cur:
+                cur.execute(f"USE DATABASE {DATABASE}")
+                cur.execute(f"USE SCHEMA {SCHEMA}")
+                cur.execute("ALTER SESSION SET TIMEZONE = 'UTC'")
+                cur.execute("ALTER SESSION SET QUOTED_IDENTIFIERS_IGNORE_CASE = TRUE")
+            st.session_state.authenticated = True
+            st.success("Authentication successful! Redirecting...")
+            st.rerun()
+        except Exception as e:
+            st.error(f"Authentication failed: {e}")
 else:
     session = st.session_state.snowpark_session
     root = Root(session)
@@ -405,7 +411,7 @@ else:
             payload["tool_resources"] = {"search1": {"name": "PROC_SERVICE", "max_results": st.session_state.num_retrieved_chunks}}
         try:
             resp = requests.post(
-                url=f"https://{SNOWFLAKE_HOST}{API_ENDPOINT}",
+                url=f"https://{HOST}{API_ENDPOINT}",
                 json=payload,
                 headers={
                     "Authorization": f'Snowflake Token="{st.session_state.CONN.rest.token}"',
@@ -541,45 +547,46 @@ else:
 
     st.title("Cortex AI Assistant by DiLytics")
     semantic_model_filename = SEMANTIC_MODEL.split("/")[-1]
-    st.write(f"Semantic Analysis: {semantic_query}")
+    st.write(f"Semantic Model: {semantic_model_filename}")
     init_service_metadata()
 
     st.sidebar.subheader("Sample Questions")
     sample_questions = [
-        "What is DiDiLytics Procurement Insight Solution?",
-        "What are the key metrics tracked in the key subject areas covered in the solution?",
-        "Describe Purchase Requisition reports.",
-        "Show total purchase amount by organization.",
+        "What is DiLytics Procurement Insight Solution?",
+        "What are the key subject areas covered in the solution?",
+        "Describe the key metrics tracked in the Purchase Requisition reports.",
+        "Show total purchase order value by organization.",
         "Which supplier has the highest requisition amount?",
         "How many active purchase orders are there?",
-        "What is the average requisition approval time?",
-        "Which supplier has the lowest and highest delivery rate for POs?",
-        "Which buyer has the least amount of time and highest PO approval duration?",
+        "What is the average requisition approval lead time?",
+        "Which supplier has the minimum and maximum PO delivery rate?",
+        "Which buyer has the least and highest PO approval duration?",
         "What are the top 5 suppliers based on purchase order amount?"
     ]
 
     for message in st.session_state.chat_history:
         with st.chat_message(message["role"]):
             st.write(message["content"])
-            if message["role"] == "assistant" and "results" in message and message["results"]:
+            if message["role"] == "assistant" and "results" in message and message["results"] is not None:
                 with st.expander("View SQL Query", expanded=False):
                     st.code(message["sql"], language="sql")
                 st.write(f"Query Results ({len(message['results'])} rows):")
                 st.dataframe(message["results"])
                 if not message["results"].empty and len(message["results"].columns) >= 2:
                     st.write("Visualization:")
-                    display_chart_tab(message["results"], prefix=f"chart}_{hash(message['content'])}", query=query)
+                    display_chart_tab(message["results"], prefix=f"chart_{hash(message['content'])}", query=message.get("query", ""))
 
     query = st.chat_input("Ask your question...")
     if query and query.lower().startswith("no of"):
-        query = query.replace("no of", "number of"", 1)
+        query = query.replace("no of", "number of", 1)
     for sample in sample_questions:
-        if st.sidebar.button(sample, key=f"sample}_{sample}")
+        if st.sidebar.button(sample, key=f"sample_{sample}"):
             query = sample
 
     if query:
-        st.session_state.query = None
-        st.session_state.current_query = ""
+        st.session_state.chart_x_axis = None
+        st.session_state.chart_y_axis = None
+        st.session_state.chart_type = "Bar Chart"
         original_query = query
         selected_question = None
         if query.strip().isdigit() and st.session_state.last_suggestions:
@@ -616,7 +623,7 @@ else:
                     selected_questions = sample_questions[:5]
                     for i, q in enumerate(selected_questions, 1):
                         response_content += f"{i}. {q}\n"
-                    response_content += "\nResults to your query:")
+                    response_content += "\nFeel free to ask any of these or come up with your own related to procurement analytics!"
                     st.write_stream(stream_text(response_content))
                     assistant_response["content"] = response_content
                     st.session_state.last_suggestions = selected_questions
@@ -626,7 +633,7 @@ else:
                     response = create_prompt(query)
                     if response:
                         response_content = response.strip()
-                        st.write_stream(response_content(response_content))
+                        st.write_stream(stream_text(response_content))
                         assistant_response["content"] = response_content
                         st.session_state.messages.append({"role": "assistant", "content": response_content})
                     else:
@@ -635,10 +642,10 @@ else:
                         assistant_response["content"] = response_content
 
                 elif is_summarize:
-                    summary = response_content(query)
+                    summary = summarize(query)
                     if summary:
                         response_content = summary.strip()
-                        st.write_stream(response_content)
+                        st.write_stream(stream_text(response_content))
                         assistant_response["content"] = response_content
                         st.session_state.messages.append({"role": "assistant", "content": response_content})
                     else:
@@ -653,19 +660,19 @@ else:
                         results = run_snowflake_query(sql)
                         if results is not None and not results.empty:
                             results_text = results.to_string(index=False)
-                            prompt = f"Provide a response to the query '{query}' using the following data, avoiding phrases like 'Based on your results':\n\n{results_text}"
-                            summary = response_content(st.session_state.model_name, prompt)
+                            prompt = f"Provide a concise natural language answer to the query '{query}' using the following data, avoiding phrases like 'Based on the query results':\n\n{results_text}"
+                            summary = complete(st.session_state.model_name, prompt)
                             if not summary:
-                                summary = "Unable to generate a response."
+                                summary = "Unable to generate a natural language summary."
                             response_content = summary.strip()
-                            st.write_stream(response_text(response_content))
+                            st.write_stream(stream_text(response_content))
                             with st.expander("View SQL Query", expanded=False):
                                 st.code(sql, language="sql")
                             st.write(f"Query Results ({len(results)} rows):")
                             st.dataframe(results)
                             if len(results.columns) >= 2:
                                 st.write("Visualization:")
-                                display_chart(results, prefix=f"chart}_{hash(query)}", query=query)
+                                display_chart_tab(results, prefix=f"chart_{hash(query)}", query=query)
                             assistant_response.update({
                                 "content": response_content,
                                 "sql": sql,
@@ -696,10 +703,10 @@ else:
                         summary = create_prompt(query)
                         if summary:
                             response_content = summary.strip()
-                            st.write_stream(stream(response_content))
+                            st.write_stream(stream_text(response_content))
                         else:
                             response_content = summarize_unstructured_answer(raw_result).strip()
-                            st.write_stream(stream(response_content))
+                            st.write_stream(stream_text(response_content))
                         assistant_response["content"] = response_content
                         st.session_state.messages.append({"role": "assistant", "content": response_content})
                     else:
@@ -709,11 +716,11 @@ else:
 
                 if failed_response:
                     suggestions = suggest_sample_questions(query)
-                    response_content = "I'm not sure about your question. Here are some suggestions you can ask me:\n\n"
+                    response_content = "I'm not sure about your question. Here are some questions you can ask me:\n\n"
                     for i, suggestion in enumerate(suggestions, 1):
                         response_content += f"{i}. {suggestion}\n"
-                    response_content += "\nThese suggestions might help clarify your query. Feel free to try one or rephrase your question!")
-                    st.write(response_content(response_content))
+                    response_content += "\nThese questions might help clarify your query. Feel free to try one or rephrase your question!"
+                    st.write_stream(stream_text(response_content))
                     assistant_response["content"] = response_content
                     st.session_state.last_suggestions = suggestions
                     st.session_state.messages.append({"role": "assistant", "content": response_content})
@@ -723,31 +730,3 @@ else:
                 st.session_state.current_results = assistant_response.get("results")
                 st.session_state.current_sql = assistant_response.get("sql")
                 st.session_state.current_summary = assistant_response.get("summary")
-</xcontent>
-
-### Key Configuration
-Before deploying, replace the placeholders in the credentials section with your actual Snowflake credentials:
-- `SNOWFLAKE_USERNAME = "your_snowflake_username"`: Use the username that worked locally.
-- `SNOWFLAKE_PASSWORD = "your_snowflake_password"`: Use the corresponding password.
-- The other values (`SNOWFLAKE_ACCOUNT`, `SNOWFLAKE_HOST`, etc.) are set to the values you provided previously (`gbjyvct-lsb50763`, `AI`, `DWH_MART`, etc.). Verify these in the Snowflake UI (**Admin > Accounts**):
-  - **Account**: Check the exact account identifier.
-  - **Host**: Ensure it matches your Snowflake instance.
-  - **Warehouse/Role/Database/Schema**: Confirm they match your local setup.
-
-**Security Note**: Hardcoding credentials exposes them in your code and is insecure, especially if the repository is public or shared. For production, revert to environment variables or secrets. For now, this bypasses the secrets issue for testing.
-
-### Deployment Files
-1. **requirements.txt**:
-   Use the same dependencies as before:
-   <xaiArtifact artifact_id="87009303-b447-479b-8303-b3a051757555" artifact_version_id="ec3a52ce-4a8e-499b-8c72-c48915a6227b" title="requirements.txt" contentType="text/plain">
-   ```
-   streamlit==1.38.0
-   snowflake-connector-python==3.10.0
-   snowflake-snowpark-python==1.22.1
-   snowflake-core==0.8.0
-   pandas==2.2.3
-   plotly==5.24.1
-   requests==2.32.3
-   cryptography==42.0.8
-   pyOpenSSL==24.1.0
-   ```
