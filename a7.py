@@ -9,6 +9,11 @@ from snowflake.core import Root
 from typing import Any, Dict, List, Optional, Tuple
 import plotly.express as px
 import time
+import logging
+
+# Configure logging
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
 
 # Snowflake/Cortex Configuration
 HOST = "gbjyvct-lsb50763.snowflakecomputing.com"
@@ -41,16 +46,16 @@ if "authenticated" not in st.session_state:
     st.session_state.password = ""
     st.session_state.CONN = None
     st.session_state.snowpark_session = None
-if "debug_mode" not in st.session_state:
-    st.session_state.debug_mode = False
-# Initialize chart selection persistence
+    st.session_state.chat_history = []
+    st.session_state.messages = []
+if "last_suggestions" not in st.session_state:
+    st.session_state.last_suggestions = []
 if "chart_x_axis" not in st.session_state:
     st.session_state.chart_x_axis = None
 if "chart_y_axis" not in st.session_state:
     st.session_state.chart_y_axis = None
 if "chart_type" not in st.session_state:
     st.session_state.chart_type = "Bar Chart"
-# Initialize query and results persistence
 if "current_query" not in st.session_state:
     st.session_state.current_query = None
 if "current_results" not in st.session_state:
@@ -59,6 +64,22 @@ if "current_sql" not in st.session_state:
     st.session_state.current_sql = None
 if "current_summary" not in st.session_state:
     st.session_state.current_summary = None
+if "service_metadata" not in st.session_state:
+    st.session_state.service_metadata = [{"name": "PROC_SERVICE", "search_column": ""}]
+if "selected_cortex_search_service" not in st.session_state:
+    st.session_state.selected_cortex_search_service = "PROC_SERVICE"
+if "model_name" not in st.session_state:
+    st.session_state.model_name = "mistral-large"
+if "num_retrieved_chunks" not in st.session_state:
+    st.session_state.num_retrieved_chunks = 100
+if "num_chat_messages" not in st.session_state:
+    st.session_state.num_chat_messages = 10
+if "use_chat_history" not in st.session_state:
+    st.session_state.use_chat_history = True
+if "clear_conversation" not in st.session_state:
+    st.session_state.clear_conversation = False
+if "rerun_trigger" not in st.session_state:
+    st.session_state.rerun_trigger = False
 
 # Hide Streamlit branding, prevent chat history shading, and disable copy buttons/text boxes
 st.markdown("""
@@ -69,24 +90,9 @@ st.markdown("""
     background-color: transparent !important;
     white-space: pre-wrap !important;
     word-wrap: break-word !important;
-    overflow: hidden !important;
-    width: 100% !important;
-    max-width: 100% !important;
-    box-sizing: border-box !important;
-    padding: 10px !important; /* Add padding for readability */
 }
 [data-testid="stChatMessageContent"] {
     white-space: pre-wrap !important;
-    word-wrap: break-word !important;
-    overflow: hidden !important;
-    overflow-y: hidden !important; /* Explicitly disable vertical scrollbar */
-    width: 100% !important;
-    max-width: 100% !important;
-    height: auto !important; /* Allow container to expand vertically */
-    min-height: 20px !important; /* Ensure minimum height for short content */
-    box-sizing: border-box !important;
-    line-height: 1.5 !important; /* Improve readability of lists */
-    font-size: 16px !important; /* Consistent font size */
 }
 .copy-button, [data-testid="copy-button"], [title="Copy to clipboard"], [data-testid="stTextArea"] {
     display: none !important;
@@ -232,13 +238,17 @@ def create_prompt(user_question):
     """
     return complete(st.session_state.model_name, prompt)
 
+# Authentication logic
 if not st.session_state.authenticated:
     st.title("Welcome to Snowflake Cortex AI")
-    st.write("Please login to interact with your data")
+    st.markdown("Please login to interact with your data")
+
     st.session_state.username = st.text_input("Enter Snowflake Username:", value=st.session_state.username)
     st.session_state.password = st.text_input("Enter Password:", type="password")
+
     if st.button("Login"):
         try:
+            logger.debug(f"Attempting to connect to Snowflake with user={st.session_state.username}, account=gbjyvct-lsb50763, host={HOST}")
             conn = snowflake.connector.connect(
                 user=st.session_state.username,
                 password=st.session_state.password,
@@ -251,20 +261,25 @@ if not st.session_state.authenticated:
                 schema=SCHEMA,
             )
             st.session_state.CONN = conn
+
             snowpark_session = Session.builder.configs({
                 "connection": conn
             }).create()
             st.session_state.snowpark_session = snowpark_session
+
             with conn.cursor() as cur:
                 cur.execute(f"USE DATABASE {DATABASE}")
                 cur.execute(f"USE SCHEMA {SCHEMA}")
                 cur.execute("ALTER SESSION SET TIMEZONE = 'UTC'")
                 cur.execute("ALTER SESSION SET QUOTED_IDENTIFIERS_IGNORE_CASE = TRUE")
+
             st.session_state.authenticated = True
             st.success("Authentication successful! Redirecting...")
             st.rerun()
+
         except Exception as e:
-            st.error(f"Authentication failed: {e}")
+            logger.error(f"Authentication failed: {str(e)}")
+            st.error(f"Authentication failed: {str(e)}")
 else:
     session = st.session_state.snowpark_session
     root = Root(session)
