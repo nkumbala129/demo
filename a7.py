@@ -14,6 +14,7 @@ import logging
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
 
 # Snowflake/Cortex Configuration
 HOST = os.getenv("SNOWFLAKE_HOST", "gbjyvct-lsb50763.snowflakecomputing.com")
@@ -34,7 +35,7 @@ MODELS = [
 
 # Streamlit Page Config
 st.set_page_config(
-    page_title="Welcome to Cortex AI Assistant",
+    page_title="Welcome to Snowflake Cortex AI Assistant",
     layout="wide",
     initial_sidebar_state="auto"
 )
@@ -236,211 +237,237 @@ def create_prompt(user_question):
     """
     return complete(st.session_state.model_name, prompt)
 
-# Authentication using environment variables
-if not st.session_state.authenticated:
-    st.title("Welcome to Snowflake Cortex AI")
-    st.write("Connecting to Snowflake...")
-    try:
-        logging.debug(f"Connecting to Snowflake with user={os.getenv('SNOWFLAKE_USERNAME')}, account={os.getenv('SNOWFLAKE_ACCOUNT')}, host={os.getenv('SNOWFLAKE_HOST')}")
-        conn = snowflake.connector.connect(
-            user=os.getenv("SNOWFLAKE_USERNAME"),
-            password=os.getenv("SNOWFLAKE_PASSWORD"),
-            account=os.getenv("SNOWFLAKE_ACCOUNT"),
-            host=os.getenv("SNOWFLAKE_HOST"),
-            port=443,
-            warehouse=os.getenv("SNOWFLAKE_WAREHOUSE"),
-            role=os.getenv("SNOWFLAKE_ROLE"),
-            database=os.getenv("SNOWFLAKE_DATABASE"),
-            schema=os.getenv("SNOWFLAKE_SCHEMA"),
-            client_session_keep_alive=True
-        )
-        st.session_state.CONN = conn
-        snowpark_session = Session.builder.configs({
-            "connection": conn
-        }).create()
-        st.session_state.snowpark_session = snowpark_session
-        with conn.cursor() as cur:
-            cur.execute(f"USE DATABASE {os.getenv('SNOWFLAKE_DATABASE')}")
-            cur.execute(f"USE SCHEMA {os.getenv('SNOWFLAKE_SCHEMA')}")
-            cur.execute("ALTER SESSION SET TIMEZONE = 'UTC'")
-            cur.execute("ALTER SESSION SET QUOTED_IDENTIFIERS_IGNORE_CASE = TRUE")
-        st.session_state.authenticated = True
-        st.success("Authentication successful! Redirecting...")
-        st.rerun()
-    except Exception as e:
-        logging.error(f"Authentication failed: {str(e)}")
-        st.error(f"Authentication failed: {str(e)}")
+# Validate environment variables
+required_env_vars = [
+    "SNOWFLAKE_USERNAME",
+    "SNOWFLAKE_PASSWORD",
+    "SNOWFLAKE_ACCOUNT",
+    "SNOWFLAKE_HOST",
+    "SNOWFLAKE_WAREHOUSE",
+    "SNOWFLAKE_ROLE",
+    "SNOWFLAKE_DATABASE",
+    "SNOWFLAKE_SCHEMA"
+]
+missing_vars = [var for var in required_env_vars if not os.getenv(var) or os.getenv(var).strip() == ""]
+if missing_vars:
+    error_msg = f"Missing or empty environment variables: {', '.join(missing_vars)}. Please configure these in Streamlit Cloud secrets."
+    logger.error(error_msg)
+    st.error(error_msg)
 else:
-    session = st.session_state.snowpark_session
-    root = Root(session)
-
-    if st.session_state.rerun_trigger:
-        st.session_state.rerun_trigger = False
-        st.rerun()
-
-    def run_snowflake_query(query):
+    # Authentication using environment variables
+    if not st.session_state.authenticated:
+        st.title("Welcome to Snowflake Cortex AI")
+        st.write("Connecting to Snowflake...")
         try:
-            if not query:
-                return None
-            df = session.sql(query)
-            data = df.collect()
-            if not data:
-                return None
-            columns = df.schema.names
-            result_df = pd.DataFrame(data, columns=columns)
-            return result_df
-        except Exception as e:
-            st.error(f"❌ SQL Execution Error: {str(e)}")
-            return None
-
-    def is_structured_query(query: str):
-        structured_patterns = [
-            r'\b(count|number|where|group by|order by|sum|avg|max|min|total|how many|which|show|list|names?|are there any|rejected deliveries?|least|highest|duration|approval)\b',
-            r'\b(vendor|supplier|requisition|purchase order|po|organization|department|buyer|delivery|received|billed|rejected|late|on time|late deliveries?|approval duration)\b'
-        ]
-        return any(re.search(pattern, query.lower()) for pattern in structured_patterns)
-
-    def is_complete_query(query: str):
-        complete_patterns = [r'\b(generate|write|create|describe|explain)\b']
-        return any(re.search(pattern, query.lower()) for pattern in complete_patterns)
-
-    def is_summarize_query(query: str):
-        summarize_patterns = [r'\b(summarize|summary|condense)\b']
-        return any(re.search(pattern, query.lower()) for pattern in summarize_patterns)
-
-    def is_question_suggestion_query(query: str):
-        suggestion_patterns = [
-            r'\b(what|which|how)\b.*\b(questions|type of questions|queries)\b.*\b(ask|can i ask|pose)\b',
-            r'\b(give me|show me|list)\b.*\b(questions|examples|sample questions)\b'
-        ]
-        return any(re.search(pattern, query.lower()) for pattern in suggestion_patterns)
-
-    def is_greeting_query(query: str):
-        greeting_patterns = [
-            r'^\b(hello|hi|hey|greet)\b$',
-            r'^\b(hello|hi|hey|greet)\b\s.*$'
-        ]
-        return any(re.search(pattern, query.lower()) for pattern in greeting_patterns)
-
-    def complete(model, prompt):
-        try:
-            prompt = prompt.replace("'", "\\'")
-            query = f"SELECT SNOWFLAKE.CORTEX.COMPLETE('{model}', '{prompt}') AS response"
-            result = session.sql(query).collect()
-            return result[0]["RESPONSE"]
-        except Exception as e:
-            st.error(f"❌ COMPLETE Function Error: {str(e)}")
-            return None
-
-    def summarize(text):
-        try:
-            text = text.replace("'", "\\'")
-            query = f"SELECT SNOWFLAKE.CORTEX.SUMMARIZE('{text}') AS summary"
-            result = session.sql(query).collect()
-            return result[0]["SUMMARY"]
-        except Exception as e:
-            st.error(f"❌ SUMMARIZE Function Error: {str(e)}")
-            return None
-
-    def parse_sse_response(response_text: str) -> List[Dict]:
-        events = []
-        lines = response_text.strip().split("\n")
-        current_event = {}
-        for line in lines:
-            if line.startswith("event:"):
-                current_event["event"] = line.split(":", 1)[1].strip()
-            elif line.startswith("data:"):
-                data_str = line.split(":", 1)[1].strip()
-                if data_str != "[DONE]":
-                    try:
-                        data_json = json.loads(data_str)
-                        current_event["data"] = data_json
-                        events.append(current_event)
-                        current_event = {}
-                    except json.JSONDecodeError as e:
-                        st.error(f"❌ Failed to parse SSE data: {str(e)} - Data: {data_str}")
-        return events
-
-    def process_sse_response(response, is_structured):
-        sql = ""
-        search_results = []
-        if not response:
-            return sql, search_results
-        try:
-            for event in response:
-                if event.get("event") == "message.delta" and "data" in event:
-                    delta = event["data"].get("delta", {})
-                    content = delta.get("content", [])
-                    for item in content:
-                        if item.get("type") == "tool_results":
-                            tool_results = item.get("tool_results", {})
-                            if "content" in tool_results:
-                                for result in tool_results["content"]:
-                                    if result.get("type") == "json":
-                                        result_data = result.get("json", {})
-                                        if is_structured and "sql" in result_data:
-                                            sql = result_data.get("sql", "")
-                                        elif not is_structured and "searchResults" in result_data:
-                                            search_results = [sr["text"] for sr in result_data["searchResults"]]
-        except Exception as e:
-            st.error(f"❌ Error Processing Response: {str(e)}")
-        return sql.strip(), search_results
-
-    def snowflake_api_call(query: str, is_structured: bool = False):
-        payload = {
-            "model": st.session_state.model_name,
-            "messages": [{"role": "user", "content": [{"type": "text", "text": query}]}],
-            "tools": []
-        }
-        if is_structured:
-            payload["tools"].append({"tool_spec": {"type": "cortex_analyst_text_to_sql", "name": "analyst1"}})
-            payload["tool_resources"] = {"analyst1": {"semantic_model_file": SEMANTIC_MODEL}}
-        else:
-            payload["tools"].append({"tool_spec": {"type": "cortex_search", "name": "search1"}})
-            payload["tool_resources"] = {"search1": {"name": "PROC_SERVICE", "max_results": st.session_state.num_retrieved_chunks}}
-        try:
-            resp = requests.post(
-                url=f"https://{os.getenv('SNOWFLAKE_HOST')}{API_ENDPOINT}",
-                json=payload,
-                headers={
-                    "Authorization": f'Snowflake Token="{st.session_state.CONN.rest.token}"',
-                    "Content-Type": "application/json",
-                },
-                timeout=API_TIMEOUT // 1000
+            logger.debug(f"Connecting to Snowflake with user={os.getenv('SNOWFLAKE_USERNAME')}, account={os.getenv('SNOWFLAKE_ACCOUNT')}, host={os.getenv('SNOWFLAKE_HOST')}")
+            conn = snowflake.connector.connect(
+                user=os.getenv("SNOWFLAKE_USERNAME"),
+                password=os.getenv("SNOWFLAKE_PASSWORD"),
+                account=os.getenv("SNOWFLAKE_ACCOUNT"),
+                host=os.getenv("SNOWFLAKE_HOST"),
+                port=443,
+                warehouse=os.getenv("SNOWFLAKE_WAREHOUSE"),
+                role=os.getenv("SNOWFLAKE_ROLE"),
+                database=os.getenv("SNOWFLAKE_DATABASE"),
+                schema=os.getenv("SNOWFLAKE_SCHEMA"),
+                client_session_keep_alive=True
             )
-            if resp.status_code < 400:
-                if not resp.text.strip():
-                    st.error("❌ API returned an empty response.")
+            st.session_state.CONN = conn
+            snowpark_session = Session.builder.configs({
+                "connection": conn
+            }).create()
+            st.session_state.snowpark_session = snowpark_session
+            with conn.cursor() as cur:
+                cur.execute(f"USE DATABASE {os.getenv('SNOWFLAKE_DATABASE')}")
+                cur.execute(f"USE SCHEMA {os.getenv('SNOWFLAKE_SCHEMA')}")
+                cur.execute("ALTER SESSION SET TIMEZONE = 'UTC'")
+                cur.execute("ALTER SESSION SET QUOTED_IDENTIFIERS_IGNORE_CASE = TRUE")
+            st.session_state.authenticated = True
+            st.success("Authentication successful! Redirecting...")
+            st.rerun()
+        except Exception as e:
+            logger.error(f"Authentication failed: {str(e)}")
+            st.error(f"Authentication failed: {str(e)}")
+    else:
+        session = st.session_state.snowpark_session
+        root = Root(session)
+
+        if st.session_state.rerun_trigger:
+            st.session_state.rerun_trigger = False
+            st.rerun()
+
+        def run_snowflake_query(query):
+            try:
+                if not query:
                     return None
-                return parse_sse_response(resp.text)
-            else:
-                raise Exception(f"Failed request with status {resp.status_code}: {resp.text}")
-        except Exception as e:
-            st.error(f"❌ API Request Error: {str(e)}")
-            return None
+                df = session.sql(query)
+                data = df.collect()
+                if not data:
+                    return None
+                columns = df.schema.names
+                result_df = pd.DataFrame(data, columns=columns)
+                return result_df
+            except Exception as e:
+                st.error(f"❌ SQL Execution Error: {str(e)}")
+                return None
 
-    def summarize_unstructured_answer(answer):
-        sentences = re.split(r'(?<!\w\.\w.)(?<![A-Z][a-z]\.)(?<=\.|")\s', answer)
-        return "\n".join(f"- {sent.strip()}" for sent in sentences[:6])
+        def is_structured_query(query: str):
+            structured_patterns = [
+                r'\b(count|number|where|group by|order by|sum|avg|max|min|total|how many|which|show|list|names?|are there any|rejected deliveries?|least|highest|duration|approval)\b',
+                r'\b(vendor|supplier|requisition|purchase order|po|organization|department|buyer|delivery|received|billed|rejected|late|on time|late deliveries?|approval duration)\b'
+            ]
+            return any(re.search(pattern, query.lower()) for pattern in structured_patterns)
 
-    def suggest_sample_questions(query: str) -> List[str]:
-        try:
-            prompt = (
-                f"The user asked: '{query}'. This question may be ambiguous or unclear in the context of a business-facing procurement analytics assistant. "
-                f"Generate 3-5 clear, concise sample questions related to purchase orders, requisitions, suppliers, or procurement metrics. "
-                f"The questions should be easy for a business user to understand and answerable using procurement data such as supplier names, requisition statuses, or PO values. "
-                f"Format as a numbered list. Example format:\n1. Which suppliers have the highest purchase order amounts?\n2. What is the approval rate for requisitions this quarter?"
-            )
-            response = complete(st.session_state.model_name, prompt)
-            if response:
-                questions = []
-                for line in response.split("\n"):
-                    line = line.strip()
-                    if re.match(r'^\d+\.\s*.+', line):
-                        question = re.sub(r'^\d+\.\s*', '', line)
-                        questions.append(question)
-                return questions[:5]
+        def is_complete_query(query: str):
+            complete_patterns = [r'\b(generate|write|create|describe|explain)\b']
+            return any(re.search(pattern, query.lower()) for pattern in complete_patterns)
+
+        def is_summarize_query(query: str):
+            summarize_patterns = [r'\b(summarize|summary|condense)\b']
+            return any(re.search(pattern, query.lower()) for pattern in summarize_patterns)
+
+        def is_question_suggestion_query(query: str):
+            suggestion_patterns = [
+                r'\b(what|which|how)\b.*\b(questions|type of questions|queries)\b.*\b(ask|can i ask|pose)\b',
+                r'\b(give me|show me|list)\b.*\b(questions|examples|sample questions)\b'
+            ]
+            return any(re.search(pattern, query.lower()) for pattern in suggestion_patterns)
+
+        def is_greeting_query(query: str):
+            greeting_patterns = [
+                r'^\b(hello|hi|hey|greet)\b$',
+                r'^\b(hello|hi|hey|greet)\b\s.*$'
+            ]
+            return any(re.search(pattern, query.lower()) for pattern in greeting_patterns)
+
+        def complete(model, prompt):
+            try:
+                prompt = prompt.replace("'", "\\'")
+                query = f"SELECT SNOWFLAKE.CORTEX.COMPLETE('{model}', '{prompt}') AS response"
+                result = session.sql(query).collect()
+                return result[0]["RESPONSE"]
+            except Exception as e:
+                st.error(f"❌ COMPLETE Function Error: {str(e)}")
+                return None
+
+        def summarize(text):
+            try:
+                text = text.replace("'", "\\'")
+                query = f"SELECT SNOWFLAKE.CORTEX.SUMMARIZE('{text}') AS summary"
+                result = session.sql(query).collect()
+                return result[0]["SUMMARY"]
+            except Exception as e:
+                st.error(f"❌ SUMMARIZE Function Error: {str(e)}")
+                return None
+
+        def parse_sse_response(response_text: str) -> List[Dict]:
+            events = []
+            lines = response_text.strip().split("\n")
+            current_event = {}
+            for line in lines:
+                if line.startswith("event:"):
+                    current_event["event"] = line.split(":", 1)[1].strip()
+                elif line.startswith("data:"):
+                    data_str = line.split(":", 1)[1].strip()
+                    if data_str != "[DONE]":
+                        try:
+                            data_json = json.loads(data_str)
+                            current_event["data"] = data_json
+                            events.append(current_event)
+                            current_event = {}
+                        except json.JSONDecodeError as e:
+                            st.error(f"❌ Failed to parse SSE data: {str(e)} - Data: {data_str}")
+            return events
+
+        def process_sse_response(response, is_structured):
+            sql = ""
+            search_results = []
+            if not response:
+                return sql, search_results
+            try:
+                for event in response:
+                    if event.get("event") == "message.delta" and "data" in event:
+                        delta = event["data"].get("delta", {})
+                        content = delta.get("content", [])
+                        for item in content:
+                            if item.get("type") == "tool_results":
+                                tool_results = item.get("tool_results", {})
+                                if "content" in tool_results:
+                                    for result in tool_results["content"]:
+                                        if result.get("type") == "json":
+                                            result_data = result.get("json", {})
+                                            if is_structured and "sql" in result_data:
+                                                sql = result_data.get("sql", "")
+                                            elif not is_structured and "searchResults" in result_data:
+                                                search_results = [sr["text"] for sr in result_data["searchResults"]]
+            except Exception as e:
+                st.error(f"❌ Error Processing Response: {str(e)}")
+            return sql.strip(), search_results
+
+        def snowflake_api_call(query: str, is_structured: bool = False):
+            payload = {
+                "model": st.session_state.model_name,
+                "messages": [{"role": "user", "content": [{"type": "text", "text": query}]}],
+                "tools": []
+            }
+            if is_structured:
+                payload["tools"].append({"tool_spec": {"type": "cortex_analyst_text_to_sql", "name": "analyst1"}})
+                payload["tool_resources"] = {"analyst1": {"semantic_model_file": SEMANTIC_MODEL}}
             else:
+                payload["tools"].append({"tool_spec": {"type": "cortex_search", "name": "search1"}})
+                payload["tool_resources"] = {"search1": {"name": "PROC_SERVICE", "max_results": st.session_state.num_retrieved_chunks}}
+            try:
+                resp = requests.post(
+                    url=f"https://{os.getenv('SNOWFLAKE_HOST')}{API_ENDPOINT}",
+                    json=payload,
+                    headers={
+                        "Authorization": f'Snowflake Token="{st.session_state.CONN.rest.token}"',
+                        "Content-Type": "application/json",
+                    },
+                    timeout=API_TIMEOUT // 1000
+                )
+                if resp.status_code < 400:
+                    if not resp.text.strip():
+                        st.error("❌ API returned an empty response.")
+                        return None
+                    return parse_sse_response(resp.text)
+                else:
+                    raise Exception(f"Failed request with status {resp.status_code}: {resp.text}")
+            except Exception as e:
+                st.error(f"❌ API Request Error: {str(e)}")
+                return None
+
+        def summarize_unstructured_answer(answer):
+            sentences = re.split(r'(?<!\w\.\w.)(?<![A-Z][a-z]\.)(?<=\.|")\s', answer)
+            return "\n".join(f"- {sent.strip()}" for sent in sentences[:6])
+
+        def suggest_sample_questions(query: str) -> List[str]:
+            try:
+                prompt = (
+                    f"The user asked: '{query}'. This question may be ambiguous or unclear in the context of a business-facing procurement analytics assistant. "
+                    f"Generate 3-5 clear, concise sample questions related to purchase orders, requisitions, suppliers, or procurement metrics. "
+                    f"The questions should be easy for a business user to understand and answerable using procurement data such as supplier names, requisition statuses, or PO values. "
+                    f"Format as a numbered list. Example format:\n1. Which suppliers have the highest purchase order amounts?\n2. What is the approval rate for requisitions this quarter?"
+                )
+                response = complete(st.session_state.model_name, prompt)
+                if response:
+                    questions = []
+                    for line in response.split("\n"):
+                        line = line.strip()
+                        if re.match(r'^\d+\.\s*.+', line):
+                            question = re.sub(r'^\d+\.\s*', '', line)
+                            questions.append(question)
+                    return questions[:5]
+                else:
+                    return [
+                        "Which buyer has the most purchase orders submitted in the last month?",
+                        "What is the average time taken for PO approval by each buyer in the current fiscal year?",
+                        "Which suppliers have the longest lead times for delivering goods after PO approval?",
+                        "What is the total value of purchase orders approved by each department in the last quarter?",
+                        "Which requisitions have been pending approval for more than a week?"
+                    ]
+            except Exception as e:
+                st.error(f"❌ Failed to generate sample questions: {str(e)}")
                 return [
                     "Which buyer has the most purchase orders submitted in the last month?",
                     "What is the average time taken for PO approval by each buyer in the current fiscal year?",
@@ -448,274 +475,265 @@ else:
                     "What is the total value of purchase orders approved by each department in the last quarter?",
                     "Which requisitions have been pending approval for more than a week?"
                 ]
-        except Exception as e:
-            st.error(f"❌ Failed to generate sample questions: {str(e)}")
-            return [
-                "Which buyer has the most purchase orders submitted in the last month?",
-                "What is the average time taken for PO approval by each buyer in the current fiscal year?",
-                "Which suppliers have the longest lead times for delivering goods after PO approval?",
-                "What is the total value of purchase orders approved by each department in the last quarter?",
-                "Which requisitions have been pending approval for more than a week?"
-            ]
 
-    def display_chart_tab(df: pd.DataFrame, prefix: str = "chart", query: str = ""):
-        try:
-            if df is None or df.empty or len(df.columns) < 2:
-                st.warning("No valid data available for visualization.")
-                return
-            query_lower = query.lower()
-            if re.search(r'\b(county|jurisdiction)\b', query_lower):
-                default_data = "Pie Chart"
-            elif re.search(r'\b(month|year|date)\b', query_lower):
-                default_data = "Line Chart"
-            else:
-                default_data = "Bar Chart"
-            all_cols = list(df.columns)
-            col1, col2, col3 = st.columns(3)
-            x_col = col1.selectbox("X axis", all_cols, index=0, key=f"{prefix}_x")
-            remaining_cols = [c for c in all_cols if c != x_col]
-            y_col = col2.selectbox("Y axis", remaining_cols, index=0, key=f"{prefix}_y")
-            chart_options = ["Line Chart", "Bar Chart", "Pie Chart", "Scatter Chart", "Histogram Chart"]
-            chart_type = col3.selectbox("Chart Type", chart_options, index=chart_options.index(default_data), key=f"{prefix}_type")
-            if chart_type == "Line Chart":
-                fig = px.line(df, x=x_col, y=y_col, title=chart_type)
-                st.plotly_chart(fig, key=f"{prefix}_line")
-            elif chart_type == "Bar Chart":
-                fig = px.bar(df, x=x_col, y=y_col, title=chart_type)
-                st.plotly_chart(fig, key=f"{prefix}_bar")
-            elif chart_type == "Pie Chart":
-                fig = px.pie(df, names=x_col, values=y_col, title=chart_type)
-                st.plotly_chart(fig, key=f"{prefix}_pie")
-            elif chart_type == "Scatter Chart":
-                fig = px.scatter(df, x=x_col, y=y_col, title=chart_type)
-                st.plotly_chart(fig, key=f"{prefix}_scatter")
-            elif chart_type == "Histogram Chart":
-                fig = px.histogram(df, x=x_col, title=chart_type)
-                st.plotly_chart(fig, key=f"{prefix}_hist")
-        except Exception as e:
-            st.error(f"❌ Error generating chart: {str(e)}")
-
-    with st.sidebar:
-        st.markdown("""
-        <style>
-        [data-testid="stSidebar"] [data-testid="stButton"] > button {
-            background-color: #29B5E8 !important;
-            color: white !important;
-            font-weight: bold !important;
-            width: 100% !important;
-            border-radius: 0px !important;
-            margin: 0 !important;
-            border: none !important;
-            padding: 0.5rem 1rem !important;
-        }
-        </style>
-        """, unsafe_allow_html=True)
-        logo_container = st.container()
-        button_container = st.container()
-        about_container = st.container()
-        help_container = st.container()
-        with logo_container:
-            logo_url = "https://www.snowflake.com/wp-content/themes/snowflake/assets/img/logo-blue.svg"
-            st.image(logo_url, width=250)
-        with button_container:
-            init_config_options()
-        with about_container:
-            st.markdown("### About")
-            st.write(
-                "This application uses Snowflake Cortex Analyst to interpret "
-                "your natural language questions and generate data insights. "
-                "Simply ask a question below to see relevant answers and visualizations."
-            )
-        with help_container:
-            st.markdown("### Help & Documentation")
-            st.write(
-                "- [User Guide](https://docs.snowflake.com/en/guides-overview-ai-features)  \n"
-                "- [Snowflake Cortex Analyst Docs](https://docs.snowflake.com/)  \n"
-                "- [Contact Support](https://www.snowflake.com/en/support/)"
-            )
-
-    st.title("Cortex AI Assistant by DiLytics")
-    semantic_model_filename = SEMANTIC_MODEL.split("/")[-1]
-    st.write(f"Semantic Model: {semantic_model_filename}")
-    init_service_metadata()
-
-    st.sidebar.subheader("Sample Questions")
-    sample_questions = [
-        "What is DiLytics Procurement Insight Solution?",
-        "What are the key subject areas covered in the solution?",
-        "Describe the key metrics tracked in the Purchase Requisition reports.",
-        "Show total purchase order value by organization.",
-        "Which supplier has the highest requisition amount?",
-        "How many active purchase orders are there?",
-        "What is the average requisition approval lead time?",
-        "Which supplier has the minimum and maximum PO delivery rate?",
-        "Which buyer has the least and highest PO approval duration?",
-        "What are the top 5 suppliers based on purchase order amount?"
-    ]
-
-    for message in st.session_state.chat_history:
-        with st.chat_message(message["role"]):
-            st.write(message["content"])
-            if message["role"] == "assistant" and "results" in message and message["results"] is not None:
-                with st.expander("View SQL Query", expanded=False):
-                    st.code(message["sql"], language="sql")
-                st.write(f"Query Results ({len(message['results'])} rows):")
-                st.dataframe(message["results"])
-                if not message["results"].empty and len(message["results"].columns) >= 2:
-                    st.write("Visualization:")
-                    display_chart_tab(message["results"], prefix=f"chart_{hash(message['content'])}", query=message.get("query", ""))
-
-    query = st.chat_input("Ask your question...")
-    if query and query.lower().startswith("no of"):
-        query = query.replace("no of", "number of", 1)
-    for sample in sample_questions:
-        if st.sidebar.button(sample, key=f"sample_{sample}"):
-            query = sample
-
-    if query:
-        st.session_state.chart_x_axis = None
-        st.session_state.chart_y_axis = None
-        st.session_state.chart_type = "Bar Chart"
-        original_query = query
-        selected_question = None
-        if query.strip().isdigit() and st.session_state.last_suggestions:
+        def display_chart_tab(df: pd.DataFrame, prefix: str = "chart", query: str = ""):
             try:
-                index = int(query.strip()) - 1
-                if 0 <= index < len(st.session_state.last_suggestions):
-                    selected_question = st.session_state.last_suggestions[index]
-                    query = selected_question
+                if df is None or df.empty or len(df.columns) < 2:
+                    st.warning("No valid data available for visualization.")
+                    return
+                query_lower = query.lower()
+                if re.search(r'\b(county|jurisdiction)\b', query_lower):
+                    default_data = "Pie Chart"
+                elif re.search(r'\b(month|year|date)\b', query_lower):
+                    default_data = "Line Chart"
                 else:
-                    st.warning(f"Invalid selection: {query}. Please choose a number between 1 and {len(st.session_state.last_suggestions)}.")
-                    query = original_query
+                    default_data = "Bar Chart"
+                all_cols = list(df.columns)
+                col1, col2, col3 = st.columns(3)
+                x_col = col1.selectbox("X axis", all_cols, index=0, key=f"{prefix}_x")
+                remaining_cols = [c for c in all_cols if c != x_col]
+                y_col = col2.selectbox("Y axis", remaining_cols, index=0, key=f"{prefix}_y")
+                chart_options = ["Line Chart", "Bar Chart", "Pie Chart", "Scatter Chart", "Histogram Chart"]
+                chart_type = col3.selectbox("Chart Type", chart_options, index=chart_options.index(default_data), key=f"{prefix}_type")
+                if chart_type == "Line Chart":
+                    fig = px.line(df, x=x_col, y=y_col, title=chart_type)
+                    st.plotly_chart(fig, key=f"{prefix}_line")
+                elif chart_type == "Bar Chart":
+                    fig = px.bar(df, x=x_col, y=y_col, title=chart_type)
+                    st.plotly_chart(fig, key=f"{prefix}_bar")
+                elif chart_type == "Pie Chart":
+                    fig = px.pie(df, names=x_col, values=y_col, title=chart_type)
+                    st.plotly_chart(fig, key=f"{prefix}_pie")
+                elif chart_type == "Scatter Chart":
+                    fig = px.scatter(df, x=x_col, y=y_col, title=chart_type)
+                    st.plotly_chart(fig, key=f"{prefix}_scatter")
+                elif chart_type == "Histogram Chart":
+                    fig = px.histogram(df, x=x_col, title=chart_type)
+                    st.plotly_chart(fig, key=f"{prefix}_hist")
             except Exception as e:
-                query = original_query
-        st.session_state.chat_history.append({"role": "user", "content": original_query})
-        st.session_state.messages.append({"role": "user", "content": original_query})
-        with st.chat_message("user"):
-            st.write(original_query)
-        with st.chat_message("assistant"):
-            with st.spinner("Generating Response..."):
-                is_structured = is_structured_query(query)
-                is_complete = is_complete_query(query)
-                is_summarize = is_summarize_query(query)
-                is_suggestion = is_question_suggestion_query(query)
-                is_greeting = is_greeting_query(query)
-                assistant_response = {"role": "assistant", "content": "", "query": query}
-                response_content = ""
-                failed_response = False
+                st.error(f"❌ Error generating chart: {str(e)}")
 
-                if is_greeting or is_suggestion:
-                    greeting = original_query.lower().split()[0]
-                    if greeting not in ["hi", "hello", "hey", "greet"]:
-                        greeting = "Hello"
-                    response_content = f"{greeting}! I'm here to help with your procurement analytics questions. Here are some questions you can ask me:\n\n"
-                    selected_questions = sample_questions[:5]
-                    for i, q in enumerate(selected_questions, 1):
-                        response_content += f"{i}. {q}\n"
-                    response_content += "\nFeel free to ask any of these or come up with your own related to procurement analytics!"
-                    st.write_stream(stream_text(response_content))
-                    assistant_response["content"] = response_content
-                    st.session_state.last_suggestions = selected_questions
-                    st.session_state.messages.append({"role": "assistant", "content": response_content})
+        with st.sidebar:
+            st.markdown("""
+            <style>
+            [data-testid="stSidebar"] [data-testid="stButton"] > button {
+                background-color: #29B5E8 !important;
+                color: white !important;
+                font-weight: bold !important;
+                width: 100% !important;
+                border-radius: 0px !important;
+                margin: 0 !important;
+                border: none !important;
+                padding: 0.5rem 1rem !important;
+            }
+            </style>
+            """, unsafe_allow_html=True)
+            logo_container = st.container()
+            button_container = st.container()
+            about_container = st.container()
+            help_container = st.container()
+            with logo_container:
+                logo_url = "https://www.snowflake.com/wp-content/themes/snowflake/assets/img/logo-blue.svg"
+                st.image(logo_url, width=250)
+            with button_container:
+                init_config_options()
+            with about_container:
+                st.markdown("### About")
+                st.write(
+                    "This application uses Snowflake Cortex Analyst to interpret "
+                    "your natural language questions and generate data insights. "
+                    "Simply ask a question below to see relevant answers and visualizations."
+                )
+            with help_container:
+                st.markdown("### Help & Documentation")
+                st.write(
+                    "- [User Guide](https://docs.snowflake.com/en/guides-overview-ai-features)  \n"
+                    "- [Snowflake Cortex Analyst Docs](https://docs.snowflake.com/)  \n"
+                    "- [Contact Support](https://www.snowflake.com/en/support/)"
+                )
 
-                elif is_complete:
-                    response = create_prompt(query)
-                    if response:
-                        response_content = response.strip()
+        st.title("Cortex AI Assistant by DiLytics")
+        semantic_model_filename = SEMANTIC_MODEL.split("/")[-1]
+        st.write(f"Semantic Model: {semantic_model_filename}")
+        init_service_metadata()
+
+        st.sidebar.subheader("Sample Questions")
+        sample_questions = [
+            "What is DiLytics Procurement Insight Solution?",
+            "What are the key subject areas covered in the solution?",
+            "Describe the key metrics tracked in the Purchase Requisition reports.",
+            "Show total purchase order value by organization.",
+            "Which supplier has the highest requisition amount?",
+            "How many active purchase orders are there?",
+            "What is the average requisition approval lead time?",
+            "Which supplier has the minimum and maximum PO delivery rate?",
+            "Which buyer has the least and highest PO approval duration?",
+            "What are the top 5 suppliers based on purchase order amount?"
+        ]
+
+        for message in st.session_state.chat_history:
+            with st.chat_message(message["role"]):
+                st.write(message["content"])
+                if message["role"] == "assistant" and "results" in message and message["results"] is not None:
+                    with st.expander("View SQL Query", expanded=False):
+                        st.code(message["sql"], language="sql")
+                    st.write(f"Query Results ({len(message['results'])} rows):")
+                    st.dataframe(message["results"])
+                    if not message["results"].empty and len(message["results"].columns) >= 2:
+                        st.write("Visualization:")
+                        display_chart_tab(message["results"], prefix=f"chart_{hash(message['content'])}", query=message.get("query", ""))
+
+        query = st.chat_input("Ask your question...")
+        if query and query.lower().startswith("no of"):
+            query = query.replace("no of", "number of", 1)
+        for sample in sample_questions:
+            if st.sidebar.button(sample, key=f"sample_{sample}"):
+                query = sample
+
+        if query:
+            st.session_state.chart_x_axis = None
+            st.session_state.chart_y_axis = None
+            st.session_state.chart_type = "Bar Chart"
+            original_query = query
+            selected_question = None
+            if query.strip().isdigit() and st.session_state.last_suggestions:
+                try:
+                    index = int(query.strip()) - 1
+                    if 0 <= index < len(st.session_state.last_suggestions):
+                        selected_question = st.session_state.last_suggestions[index]
+                        query = selected_question
+                    else:
+                        st.warning(f"Invalid selection: {query}. Please choose a number between 1 and {len(st.session_state.last_suggestions)}.")
+                        query = original_query
+                except Exception as e:
+                    query = original_query
+            st.session_state.chat_history.append({"role": "user", "content": original_query})
+            st.session_state.messages.append({"role": "user", "content": original_query})
+            with st.chat_message("user"):
+                st.write(original_query)
+            with st.chat_message("assistant"):
+                with st.spinner("Generating Response..."):
+                    is_structured = is_structured_query(query)
+                    is_complete = is_complete_query(query)
+                    is_summarize = is_summarize_query(query)
+                    is_suggestion = is_question_suggestion_query(query)
+                    is_greeting = is_greeting_query(query)
+                    assistant_response = {"role": "assistant", "content": "", "query": query}
+                    response_content = ""
+                    failed_response = False
+
+                    if is_greeting or is_suggestion:
+                        greeting = original_query.lower().split()[0]
+                        if greeting not in ["hi", "hello", "hey", "greet"]:
+                            greeting = "Hello"
+                        response_content = f"{greeting}! I'm here to help with your procurement analytics questions. Here are some questions you can ask me:\n\n"
+                        selected_questions = sample_questions[:5]
+                        for i, q in enumerate(selected_questions, 1):
+                            response_content += f"{i}. {q}\n"
+                        response_content += "\nFeel free to ask any of these or come up with your own related to procurement analytics!"
                         st.write_stream(stream_text(response_content))
                         assistant_response["content"] = response_content
+                        st.session_state.last_suggestions = selected_questions
                         st.session_state.messages.append({"role": "assistant", "content": response_content})
-                    else:
-                        response_content = ""
-                        failed_response = True
-                        assistant_response["content"] = response_content
 
-                elif is_summarize:
-                    summary = summarize(query)
-                    if summary:
-                        response_content = summary.strip()
-                        st.write_stream(stream_text(response_content))
-                        assistant_response["content"] = response_content
-                        st.session_state.messages.append({"role": "assistant", "content": response_content})
-                    else:
-                        response_content = ""
-                        failed_response = True
-                        assistant_response["content"] = response_content
-
-                elif is_structured:
-                    response = snowflake_api_call(query, is_structured=True)
-                    sql, _ = process_sse_response(response, is_structured=True)
-                    if sql:
-                        results = run_snowflake_query(sql)
-                        if results is not None and not results.empty:
-                            results_text = results.to_string(index=False)
-                            prompt = f"Provide a concise natural language answer to the query '{query}' using the following data, avoiding phrases like 'Based on the query results':\n\n{results_text}"
-                            summary = complete(st.session_state.model_name, prompt)
-                            if not summary:
-                                summary = "Unable to generate a natural language summary."
-                            response_content = summary.strip()
+                    elif is_complete:
+                        response = create_prompt(query)
+                        if response:
+                            response_content = response.strip()
                             st.write_stream(stream_text(response_content))
-                            with st.expander("View SQL Query", expanded=False):
-                                st.code(sql, language="sql")
-                            st.write(f"Query Results ({len(results)} rows):")
-                            st.dataframe(results)
-                            if len(results.columns) >= 2:
-                                st.write("Visualization:")
-                                display_chart_tab(results, prefix=f"chart_{hash(query)}", query=query)
-                            assistant_response.update({
-                                "content": response_content,
-                                "sql": sql,
-                                "results": results,
-                                "summary": summary
-                            })
-                            st.session_state.messages.append({
-                                "role": "assistant",
-                                "content": response_content,
-                                "sql": sql,
-                                "results": results,
-                                "summary": summary
-                            })
+                            assistant_response["content"] = response_content
+                            st.session_state.messages.append({"role": "assistant", "content": response_content})
                         else:
-                            response_content = "No data returned for the query."
+                            response_content = ""
                             failed_response = True
                             assistant_response["content"] = response_content
-                    else:
-                        response_content = "Failed to generate SQL query."
-                        failed_response = True
-                        assistant_response["content"] = response_content
 
-                else:
-                    response = snowflake_api_call(query, is_structured=False)
-                    _, search_results = process_sse_response(response, is_structured=False)
-                    if search_results:
-                        raw_result = search_results[0]
-                        summary = create_prompt(query)
+                    elif is_summarize:
+                        summary = summarize(query)
                         if summary:
                             response_content = summary.strip()
                             st.write_stream(stream_text(response_content))
+                            assistant_response["content"] = response_content
+                            st.session_state.messages.append({"role": "assistant", "content": response_content})
                         else:
-                            response_content = summarize_unstructured_answer(raw_result).strip()
-                            st.write_stream(stream_text(response_content))
-                        assistant_response["content"] = response_content
-                        st.session_state.messages.append({"role": "assistant", "content": response_content})
+                            response_content = ""
+                            failed_response = True
+                            assistant_response["content"] = response_content
+
+                    elif is_structured:
+                        response = snowflake_api_call(query, is_structured=True)
+                        sql, _ = process_sse_response(response, is_structured=True)
+                        if sql:
+                            results = run_snowflake_query(sql)
+                            if results is not None and not results.empty:
+                                results_text = results.to_string(index=False)
+                                prompt = f"Provide a concise natural language answer to the query '{query}' using the following data, avoiding phrases like 'Based on the query results':\n\n{results_text}"
+                                summary = complete(st.session_state.model_name, prompt)
+                                if not summary:
+                                    summary = "Unable to generate a natural language summary."
+                                response_content = summary.strip()
+                                st.write_stream(stream_text(response_content))
+                                with st.expander("View SQL Query", expanded=False):
+                                    st.code(sql, language="sql")
+                                st.write(f"Query Results ({len(results)} rows):")
+                                st.dataframe(results)
+                                if len(results.columns) >= 2:
+                                    st.write("Visualization:")
+                                    display_chart_tab(results, prefix=f"chart_{hash(query)}", query=query)
+                                assistant_response.update({
+                                    "content": response_content,
+                                    "sql": sql,
+                                    "results": results,
+                                    "summary": summary
+                                })
+                                st.session_state.messages.append({
+                                    "role": "assistant",
+                                    "content": response_content,
+                                    "sql": sql,
+                                    "results": results,
+                                    "summary": summary
+                                })
+                            else:
+                                response_content = "No data returned for the query."
+                                failed_response = True
+                                assistant_response["content"] = response_content
+                        else:
+                            response_content = "Failed to generate SQL query."
+                            failed_response = True
+                            assistant_response["content"] = response_content
+
                     else:
-                        response_content = ""
-                        failed_response = True
+                        response = snowflake_api_call(query, is_structured=False)
+                        _, search_results = process_sse_response(response, is_structured=False)
+                        if search_results:
+                            raw_result = search_results[0]
+                            summary = create_prompt(query)
+                            if summary:
+                                response_content = summary.strip()
+                                st.write_stream(stream_text(response_content))
+                            else:
+                                response_content = summarize_unstructured_answer(raw_result).strip()
+                                st.write_stream(stream_text(response_content))
+                            assistant_response["content"] = response_content
+                            st.session_state.messages.append({"role": "assistant", "content": response_content})
+                        else:
+                            response_content = ""
+                            failed_response = True
+                            assistant_response["content"] = response_content
+
+                    if failed_response:
+                        suggestions = suggest_sample_questions(query)
+                        response_content = "I'm not sure about your question. Here are some questions you can ask me:\n\n"
+                        for i, suggestion in enumerate(suggestions, 1):
+                            response_content += f"{i}. {suggestion}\n"
+                        response_content += "\nThese questions might help clarify your query. Feel free to try one or rephrase your question!"
+                        st.write_stream(stream_text(response_content))
                         assistant_response["content"] = response_content
+                        st.session_state.last_suggestions = suggestions
+                        st.session_state.messages.append({"role": "assistant", "content": response_content})
 
-                if failed_response:
-                    suggestions = suggest_sample_questions(query)
-                    response_content = "I'm not sure about your question. Here are some questions you can ask me:\n\n"
-                    for i, suggestion in enumerate(suggestions, 1):
-                        response_content += f"{i}. {suggestion}\n"
-                    response_content += "\nThese questions might help clarify your query. Feel free to try one or rephrase your question!"
-                    st.write_stream(stream_text(response_content))
-                    assistant_response["content"] = response_content
-                    st.session_state.last_suggestions = suggestions
-                    st.session_state.messages.append({"role": "assistant", "content": response_content})
-
-                st.session_state.chat_history.append(assistant_response)
-                st.session_state.current_query = query
-                st.session_state.current_results = assistant_response.get("results")
-                st.session_state.current_sql = assistant_response.get("sql")
-                st.session_state.current_summary = assistant_response.get("summary")
+                    st.session_state.chat_history.append(assistant_response)
+                    st.session_state.current_query = query
+                    st.session_state.current_results = assistant_response.get("results")
+                    st.session_state.current_sql = assistant_response.get("sql")
+                    st.session_state.current_summary = assistant_response.get("summary")
