@@ -41,16 +41,16 @@ if "authenticated" not in st.session_state:
     st.session_state.password = ""
     st.session_state.CONN = None
     st.session_state.snowpark_session = None
-    st.session_state.chat_history = []
-    st.session_state.messages = []
-if "last_suggestions" not in st.session_state:
-    st.session_state.last_suggestions = []
+if "debug_mode" not in st.session_state:
+    st.session_state.debug_mode = False
+# Initialize chart selection persistence
 if "chart_x_axis" not in st.session_state:
     st.session_state.chart_x_axis = None
 if "chart_y_axis" not in st.session_state:
     st.session_state.chart_y_axis = None
 if "chart_type" not in st.session_state:
     st.session_state.chart_type = "Bar Chart"
+# Initialize query and results persistence
 if "current_query" not in st.session_state:
     st.session_state.current_query = None
 if "current_results" not in st.session_state:
@@ -59,22 +59,6 @@ if "current_sql" not in st.session_state:
     st.session_state.current_sql = None
 if "current_summary" not in st.session_state:
     st.session_state.current_summary = None
-if "service_metadata" not in st.session_state:
-    st.session_state.service_metadata = [{"name": "PROC_SERVICE", "search_column": ""}]
-if "selected_cortex_search_service" not in st.session_state:
-    st.session_state.selected_cortex_search_service = "PROC_SERVICE"
-if "model_name" not in st.session_state:
-    st.session_state.model_name = "mistral-large"
-if "num_retrieved_chunks" not in st.session_state:
-    st.session_state.num_retrieved_chunks = 100
-if "num_chat_messages" not in st.session_state:
-    st.session_state.num_chat_messages = 10
-if "use_chat_history" not in st.session_state:
-    st.session_state.use_chat_history = True
-if "clear_conversation" not in st.session_state:
-    st.session_state.clear_conversation = False
-if "rerun_trigger" not in st.session_state:
-    st.session_state.rerun_trigger = False
 
 # Hide Streamlit branding, prevent chat history shading, and disable copy buttons/text boxes
 st.markdown("""
