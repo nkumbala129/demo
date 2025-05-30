@@ -16,7 +16,7 @@ retrying
 ﻿# Core dependencies for the Streamlit app
 streamlit==1.36.0
 
-
+--upgrade
 
 # HTTP requests
 requests==2.32.3
