@@ -9,8 +9,7 @@ from snowflake.core import Root
 from typing import Any, Dict, List, Optional, Tuple
 import plotly.express as px
 import time
-
-# ... (Previous imports and configurations remain unchanged)
+import logging
 
 # Snowflake/Cortex Configuration
 HOST = "GBJYVCT-LSB50763.snowflakecomputing.com"
@@ -22,10 +21,77 @@ API_TIMEOUT = 50000  # in milliseconds
 CORTEX_SEARCH_SERVICES = "AI.DWH_MART.ROC_SERVICE"
 SEMANTIC_MODEL = '@"AI"."DWH_MART"."PROCUREMENT_SEARCH"/procurement.yaml'
 
-# Initialize logging for debugging (optional)
-import logging
+# Initialize logging for debugging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Streamlit Page Config
+st.set_page_config(
+    page_title="Welcome to Cortex AI Assistant",
+    layout="wide",
+    initial_sidebar_state="auto"
+)
+
+# Initialize session state
+if "authenticated" not in st.session_state:
+    st.session_state.authenticated = False
+    st.session_state.username = ""
+    st.session_state.password = ""
+    st.session_state.CONN = None
+    st.session_state.snowpark_session = None
+    st.session_state.chat_history = []
+    st.session_state.messages = []
+if "last_suggestions" not in st.session_state:
+    st.session_state.last_suggestions = []
+if "chart_x_axis" not in st.session_state:
+    st.session_state.chart_x_axis = None
+if "chart_y_axis" not in st.session_state:
+    st.session_state.chart_y_axis = None
+if "chart_type" not in st.session_state:
+    st.session_state.chart_type = "Bar Chart"
+if "current_query" not in st.session_state:
+    st.session_state.current_query = None
+if "current_results" not in st.session_state:
+    st.session_state.current_results = None
+if "current_sql" not in st.session_state:
+    st.session_state.current_sql = None
+if "current_summary" not in st.session_state:
+    st.session_state.current_summary = None
+if "service_metadata" not in st.session_state:
+    st.session_state.service_metadata = [{"name": "PROC_SERVICE", "search_column": ""}]
+if "selected_cortex_search_service" not in st.session_state:
+    st.session_state.selected_cortex_search_service = "PROC_SERVICE"
+if "model_name" not in st.session_state:
+    st.session_state.model_name = "mistral-large"
+if "num_retrieved_chunks" not in st.session_state:
+    st.session_state.num_retrieved_chunks = 100
+if "num_chat_messages" not in st.session_state:
+    st.session_state.num_chat_messages = 10
+if "use_chat_history" not in st.session_state:
+    st.session_state.use_chat_history = True
+if "clear_conversation" not in st.session_state:
+    st.session_state.clear_conversation = False
+if "rerun_trigger" not in st.session_state:
+    st.session_state.rerun_trigger = False
+
+# Hide Streamlit branding, prevent chat history shading, and disable copy buttons/text boxes
+st.markdown("""
+<style>
+#MainMenu, header, footer {visibility: hidden;}
+[data-testid="stChatMessage"] {
+    opacity: 1 !important;
+    background-color: transparent !important;
+    white-space: pre-wrap !important;
+    word-wrap: break-word !important;
+}
+[data-testid="stChatMessageContent"] {
+    white-space: pre-wrap !important;
+}
+.copy-button, [data-testid="copy-button"], [title="Copy to clipboard"], [data-testid="stTextArea"] {
+    display: none !important;
+}
+</style>
+""", unsafe_allow_html=True)
 
 # Authentication logic
 if not st.session_state.authenticated:
@@ -52,7 +118,7 @@ if not st.session_state.authenticated:
                     account=account_identifier,
                     host=HOST,
                     port=443,
-                    warehouse="AI",
+                    warehouse="COMPUTE_WH",
                     role="ACCOUNTADMIN",
                     database=DATABASE,
                     schema=SCHEMA,
@@ -97,8 +163,22 @@ if not st.session_state.authenticated:
                 logger.error(f"Unexpected error: {str(e)}")
                 st.error(f"Authentication failed: {str(e)}. Please check your credentials and account details.")
 
-# ... (Rest of the original code remains unchanged, starting from 'else: session = st.session_state.snowpark_session')
-    # Rest of the code remains unchanged
+else:
+    session = st.session_state.snowpark_session
+    root = Root(session)
+
+    if st.session_state.rerun_trigger:
+        st.session_state.rerun_trigger = False
+        st.rerun()
+
+    # Model options
+    MODELS = [
+        "mistral-large",
+        "snowflake-arctic",
+        "llama3-70b",
+        "llama3-8b",
+    ]
+
     def stream_text(text: str, chunk_size: int = 1, delay: float = 0.02):
         for i in range(0, len(text), chunk_size):
             yield text[i:i + chunk_size]
@@ -177,7 +257,8 @@ if not st.session_state.authenticated:
         return st.session_state.chat_history[start_index : len(st.session_state.chat_history) - 1]
 
     def make_chat_history_summary(chat_history, question):
-        chat_history_str = "\n".join([f"{msg['role']}: {msg['content']}" for msg in chat_history])
+        chat_his
+tory_str = "\n".join([f"{msg['role']}: {msg['content']}" for msg in chat_history])
         prompt = f"""
             [INST]
             Based on the chat history below and the question, generate a query that extends the question
@@ -236,14 +317,6 @@ if not st.session_state.authenticated:
             Answer:
         """
         return complete(st.session_state.model_name, prompt)
-
-    # Model options
-    MODELS = [
-        "mistral-large",
-        "snowflake-arctic",
-        "llama3-70b",
-        "llama3-8b",
-    ]
 
     def run_snowflake_query(query):
         try:
