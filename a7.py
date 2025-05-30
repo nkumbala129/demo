@@ -16,7 +16,7 @@ logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 # Snowflake/Cortex Configuration
-HOST = "gbjyvct-lsb50763.snowflakecomputing.com"
+HOST = "lsb50763.snowflakecomputing.com"
 DATABASE = "AI"
 SCHEMA = "DWH_MART"
 API_ENDPOINT = "/api/v2/cortex/agent:run"
@@ -252,7 +252,7 @@ if not st.session_state.authenticated:
             conn = snowflake.connector.connect(
                 user=st.session_state.username,
                 password=st.session_state.password,
-                account="gbjyvct-lsb50763",
+                account="lsb50763",
                 host=HOST,
                 port=443,
                 warehouse="COMPUTE_WH",
