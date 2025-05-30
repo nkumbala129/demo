@@ -257,22 +257,19 @@ else:
         return st.session_state.chat_history[start_index : len(st.session_state.chat_history) - 1]
 
     def make_chat_history_summary(chat_history, question):
-        chat_his
-tory_str = "\n".join([f"{msg['role']}: {msg['content']}" for msg in chat_history])
-        prompt = f"""
-            [INST]
-            Based on the chat history below and the question, generate a query that extends the question
-            with the chat history provided. The query should be in natural language.
-            Answer with only the query. Do not add any explanation.
+        chat_history_str = "\n".join([f"{msg['role']}: {msg['content']}" for msg in chat_history])
+        prompt = f"""[INST]
+Based on the chat history below and the question, generate a query that extends the question
+with the chat history provided. The query should be in natural language.
+Answer with only the query. Do not add any explanation.
 
-            <chat_history>
-            {chat_history_str}
-            </chat_history>
-            <question>
-            {question}
-            </question>
-            [/INST]
-        """
+<chat_history>
+{chat_history_str}
+</chat_history>
+<question>
+{question}
+</question>
+[/INST]"""
         summary = complete(st.session_state.model_name, prompt)
         return summary
 
@@ -293,29 +290,27 @@ tory_str = "\n".join([f"{msg['role']}: {msg['content']}" for msg in chat_history
         if not prompt_context.strip():
             return complete(st.session_state.model_name, user_question)
         
-        prompt = f"""
-            [INST]
-            You are a helpful AI chat assistant with RAG capabilities. When a user asks you a question,
-            you will also be given context provided between <context> and </context> tags. Use that context
-            with the user's chat history provided in the between <chat_history> and </chat_history> tags
-            to provide a summary that addresses the user's question. Ensure the answer is coherent, concise,
-            and directly relevant to the user's question.
+        prompt = f"""[INST]
+You are a helpful AI chat assistant with RAG capabilities. When a user asks you a question,
+you will also be given context provided between <context> and </context> tags. Use that context
+with the user's chat history provided in the between <chat_history> and </chat_history> tags
+to provide a summary that addresses the user's question. Ensure the answer is coherent, concise,
+and directly relevant to the user's question.
 
-            If the user asks a generic question which cannot be answered with the given context or chat_history,
-            just respond directly and concisely to the user's question using the LLM.
+If the user asks a generic question which cannot be answered with the given context or chat_history,
+just respond directly and concisely to the user's question using the LLM.
 
-            <chat_history>
-            {chat_history_str}
-            </chat_history>
-            <context>
-            {prompt_context}
-            </context>
-            <question>
-            {user_question}
-            </question>
-            [/INST]
-            Answer:
-        """
+<chat_history>
+{chat_history_str}
+</chat_history>
+<context>
+{prompt_context}
+</context>
+<question>
+{user_question}
+</question>
+[/INST]
+Answer:"""
         return complete(st.session_state.model_name, prompt)
 
     def run_snowflake_query(query):
