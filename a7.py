@@ -10,6 +10,8 @@ from typing import Any, Dict, List, Optional, Tuple
 import plotly.express as px
 import time
 
+# ... (Previous imports and configurations remain unchanged)
+
 # Snowflake/Cortex Configuration
 HOST = "GBJYVCT-LSB50763.snowflakecomputing.com"
 DATABASE = "AI"
@@ -20,73 +22,10 @@ API_TIMEOUT = 50000  # in milliseconds
 CORTEX_SEARCH_SERVICES = "AI.DWH_MART.ROC_SERVICE"
 SEMANTIC_MODEL = '@"AI"."DWH_MART"."PROCUREMENT_SEARCH"/procurement.yaml'
 
-# Streamlit Page Config
-st.set_page_config(
-    page_title="Welcome to Cortex AI Assistant",
-    layout="wide",
-    initial_sidebar_state="auto"
-)
-
-# Initialize session state
-if "authenticated" not in st.session_state:
-    st.session_state.authenticated = False
-    st.session_state.username = ""
-    st.session_state.password = ""
-    st.session_state.CONN = None
-    st.session_state.snowpark_session = None
-    st.session_state.chat_history = []
-    st.session_state.messages = []
-if "last_suggestions" not in st.session_state:
-    st.session_state.last_suggestions = []
-if "chart_x_axis" not in st.session_state:
-    st.session_state.chart_x_axis = None
-if "chart_y_axis" not in st.session_state:
-    st.session_state.chart_y_axis = None
-if "chart_type" not in st.session_state:
-    st.session_state.chart_type = "Bar Chart"
-if "current_query" not in st.session_state:
-    st.session_state.current_query = None
-if "current_results" not in st.session_state:
-    st.session_state.current_results = None
-if "current_sql" not in st.session_state:
-    st.session_state.current_sql = None
-if "current_summary" not in st.session_state:
-    st.session_state.current_summary = None
-if "service_metadata" not in st.session_state:
-    st.session_state.service_metadata = [{"name": "PROC_SERVICE", "search_column": ""}]
-if "selected_cortex_search_service" not in st.session_state:
-    st.session_state.selected_cortex_search_service = "PROC_SERVICE"
-if "model_name" not in st.session_state:
-    st.session_state.model_name = "mistral-large"
-if "num_retrieved_chunks" not in st.session_state:
-    st.session_state.num_retrieved_chunks = 100
-if "num_chat_messages" not in st.session_state:
-    st.session_state.num_chat_messages = 10
-if "use_chat_history" not in st.session_state:
-    st.session_state.use_chat_history = True
-if "clear_conversation" not in st.session_state:
-    st.session_state.clear_conversation = False
-if "rerun_trigger" not in st.session_state:
-    st.session_state.rerun_trigger = False
-
-# Hide Streamlit branding
-st.markdown("""
-<style>
-#MainMenu, header, footer {visibility: hidden;}
-[data-testid="stChatMessage"] {
-    opacity: 1 !important;
-    background-color: transparent !important;
-    white-space: pre-wrap !important;
-    word-wrap: break-word !important;
-}
-[data-testid="stChatMessageContent"] {
-    white-space: pre-wrap !important;
-}
-.copy-button, [data-testid="copy-button"], [title="Copy to clipboard"], [data-testid="stTextArea"] {
-    display: none !important;
-}
-</style>
-""", unsafe_allow_html=True)
+# Initialize logging for debugging (optional)
+import logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Authentication logic
 if not st.session_state.authenticated:
@@ -97,48 +36,68 @@ if not st.session_state.authenticated:
     st.session_state.password = st.text_input("Enter Password:", type="password")
 
     if st.button("Login"):
-        try:
-            # Use the correct account identifier (remove the host part from account)
-            account_identifier = "GBJYVCT-LSB50763"
-            conn = snowflake.connector.connect(
-                user=st.session_state.username,
-                password=st.session_state.password,
-                account=account_identifier,
-                host=HOST,
-                port=443,
-                warehouse="COMPUTE_WH",
-                role="ACCOUNTADMIN",
-                database=DATABASE,
-                schema=SCHEMA,
-            )
-            st.session_state.CONN = conn
+        # Validate inputs
+        if not st.session_state.username or not st.session_state.password:
+            st.error("Please provide both username and password.")
+        else:
+            try:
+                # Use the correct account identifier
+                account_identifier = "GBJYVCT-LSB50763"
+                logger.info(f"Attempting Snowflake connection for user={st.session_state.username}, account={account_identifier}")
 
-            # Create Snowpark session
-            snowpark_session = Session.builder.configs({
-                "connection": conn
-            }).create()
-            st.session_state.snowpark_session = snowpark_session
+                # Standard username/password authentication
+                conn = snowflake.connector.connect(
+                    user=st.session_state.username,
+                    password=st.session_state.password,
+                    account=account_identifier,
+                    host=HOST,
+                    port=443,
+                    warehouse="AI",
+                    role="ACCOUNTADMIN",
+                    database=DATABASE,
+                    schema=SCHEMA,
+                    # Optional: Specify authenticator for SSO if needed
+                    # authenticator="externalbrowser"  # Uncomment for SSO
+                )
+                st.session_state.CONN = conn
 
-            # Set session parameters
-            with conn.cursor() as cur:
-                cur.execute(f"USE DATABASE {DATABASE}")
-                cur.execute(f"USE SCHEMA {SCHEMA}")
-                cur.execute("ALTER SESSION SET TIMEZONE = 'UTC'")
-                cur.execute("ALTER SESSION SET QUOTED_IDENTIFIERS_IGNORE_CASE = TRUE")
+                # Create Snowpark session
+                snowpark_session = Session.builder.configs({
+                    "connection": conn
+                }).create()
+                st.session_state.snowpark_session = snowpark_session
 
-            st.session_state.authenticated = True
-            st.success("Authentication successful! Redirecting...")
-            st.rerun()
+                # Set session parameters
+                with conn.cursor() as cur:
+                    cur.execute(f"USE DATABASE {DATABASE}")
+                    cur.execute(f"USE SCHEMA {SCHEMA}")
+                    cur.execute("ALTER SESSION SET TIMEZONE = 'UTC'")
+                    cur.execute("ALTER SESSION SET QUOTED_IDENTIFIERS_IGNORE_CASE = TRUE")
 
-        except snowflake.connector.errors.DatabaseError as db_err:
-            st.error(f"Authentication failed: Invalid username or password. Please try again.")
-        except Exception as e:
-            st.error(f"Authentication failed: {str(e)}")
+                st.session_state.authenticated = True
+                st.success("Authentication successful! Redirecting...")
+                logger.info("Snowflake authentication successful")
+                st.rerun()
 
-else:
-    session = st.session_state.snowpark_session
-    root = Root(session)
+            except snowflake.connector.errors.DatabaseError as db_err:
+                logger.error(f"Database error: {str(db_err)}")
+                if "Incorrect username or password" in str(db_err):
+                    st.error("Authentication failed: Invalid username or password. Please try again.")
+                elif "Account is locked" in str(db_err):
+                    st.error("Authentication failed: Your account is locked. Contact your Snowflake administrator.")
+                else:
+                    st.error(f"Authentication failed: {str(db_err)}")
+            except snowflake.connector.errors.OperationalError as op_err:
+                logger.error(f"Operational error: {str(op_err)}")
+                if "Connection refused" in str(op_err):
+                    st.error("Connection failed: Unable to reach Snowflake. Check network settings or account URL.")
+                else:
+                    st.error(f"Connection failed: {str(op_err)}")
+            except Exception as e:
+                logger.error(f"Unexpected error: {str(e)}")
+                st.error(f"Authentication failed: {str(e)}. Please check your credentials and account details.")
 
+# ... (Rest of the original code remains unchanged, starting from 'else: session = st.session_state.snowpark_session')
     # Rest of the code remains unchanged
     def stream_text(text: str, chunk_size: int = 1, delay: float = 0.02):
         for i in range(0, len(text), chunk_size):
