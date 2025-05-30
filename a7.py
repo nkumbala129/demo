@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import plotly.express as px
 import time
 import logging
+import retrying
 
 # Snowflake/Cortex Configuration
 HOST = "GBJYVCT-LSB50763.snowflakecomputing.com"
@@ -22,7 +23,7 @@ CORTEX_SEARCH_SERVICES = "AI.DWH_MART.ROC_SERVICE"
 SEMANTIC_MODEL = '@"AI"."DWH_MART"."PROCUREMENT_SEARCH"/procurement.yaml'
 
 # Initialize logging for debugging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 # Streamlit Page Config
@@ -93,6 +94,23 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# Function to connect to Snowflake with retry logic
+@retrying.retry(stop_max_attempt_number=3, wait_fixed=2000, retry_on_exception=lambda e: isinstance(e, (snowflake.connector.errors.OperationalError,)))
+def connect_to_snowflake(username, password, account, host, warehouse, database, schema, role):
+    return snowflake.connector.connect(
+        user=username,
+        password=password,
+        account=account,
+        host=host,
+        port=443,
+        warehouse=warehouse,
+        role=role,
+        database=database,
+        schema=schema,
+        # Optional: Specify authenticator for SSO if needed
+        # authenticator="externalbrowser"  # Uncomment for SSO
+    )
+
 # Authentication logic
 if not st.session_state.authenticated:
     st.title("Welcome to Snowflake Cortex AI")
@@ -100,6 +118,15 @@ if not st.session_state.authenticated:
 
     st.session_state.username = st.text_input("Enter Snowflake Username:", value=st.session_state.username)
     st.session_state.password = st.text_input("Enter Password:", type="password")
+
+    # Option to show diagnostic information
+    if st.checkbox("Show connection diagnostics"):
+        st.write(f"**Host**: {HOST}")
+        st.write(f"**Account Identifier**: GBJYVCT-LSB50763")
+        st.write(f"**Warehouse**: AI")
+        st.write(f"**Database**: {DATABASE}")
+        st.write(f"**Schema**: {SCHEMA}")
+        st.write(f"**Role**: ACCOUNTADMIN")
 
     if st.button("Login"):
         # Validate inputs
@@ -111,19 +138,16 @@ if not st.session_state.authenticated:
                 account_identifier = "GBJYVCT-LSB50763"
                 logger.info(f"Attempting Snowflake connection for user={st.session_state.username}, account={account_identifier}")
 
-                # Standard username/password authentication
-                conn = snowflake.connector.connect(
-                    user=st.session_state.username,
+                # Connect with retry logic
+                conn = connect_to_snowflake(
+                    username=st.session_state.username,
                     password=st.session_state.password,
                     account=account_identifier,
                     host=HOST,
-                    port=443,
                     warehouse="COMPUTE_WH",
-                    role="ACCOUNTADMIN",
                     database=DATABASE,
                     schema=SCHEMA,
-                    # Optional: Specify authenticator for SSO if needed
-                    # authenticator="externalbrowser"  # Uncomment for SSO
+                    role="ACCOUNTADMIN"
                 )
                 st.session_state.CONN = conn
 
@@ -155,13 +179,16 @@ if not st.session_state.authenticated:
                     st.error(f"Authentication failed: {str(db_err)}")
             except snowflake.connector.errors.OperationalError as op_err:
                 logger.error(f"Operational error: {str(op_err)}")
-                if "Connection refused" in str(op_err):
+                if "250001" in str(op_err):
+                    st.error("Connection failed: Could not connect to Snowflake backend after multiple attempts. Please check the account URL, network connectivity, or contact your Snowflake administrator.")
+                    st.info("Suggestions:\n- Verify the account identifier (GBJYVCT-LSB50763) and host (GBJYVCT-LSB50763.snowflakecomputing.com).\n- Ensure port 443 is open and no firewall is blocking the connection.\n- Check Snowflake's status page for outages.")
+                elif "Connection refused" in str(op_err):
                     st.error("Connection failed: Unable to reach Snowflake. Check network settings or account URL.")
                 else:
                     st.error(f"Connection failed: {str(op_err)}")
             except Exception as e:
                 logger.error(f"Unexpected error: {str(e)}")
-                st.error(f"Authentication failed: {str(e)}. Please check your credentials and account details.")
+                st.error(f"Authentication failed: {str(e)}. Please check your credentials, account details, and network connectivity.")
 
 else:
     session = st.session_state.snowpark_session
