@@ -99,7 +99,7 @@ if not st.session_state.authenticated:
     if st.button("Login"):
         try:
             # Use the correct account identifier (remove the host part from account)
-            account_identifier = "LSB50763"
+            account_identifier = "GBJYVCT-LSB50763"
             conn = snowflake.connector.connect(
                 user=st.session_state.username,
                 password=st.session_state.password,
