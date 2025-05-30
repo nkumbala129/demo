@@ -60,7 +60,7 @@ if not st.session_state.authenticated:
                 account="GBJYVCT-LSB50763",
                 host=HOST,
                 port=443,
-                warehouse="AI",
+                warehouse="COMPUTE_WH",
                 role="ACCOUNTADMIN",
                 database=DATABASE,
                 schema=SCHEMA,
