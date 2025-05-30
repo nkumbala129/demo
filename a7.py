@@ -9,8 +9,6 @@ from snowflake.core import Root
 from typing import Any, Dict, List, Optional, Tuple
 import plotly.express as px
 import time
-import logging
-import retrying
 
 # Snowflake/Cortex Configuration
 HOST = "GBJYVCT-LSB50763.snowflakecomputing.com"
@@ -21,10 +19,6 @@ API_ENDPOINT = "/api/v2/cortex/agent:run"
 API_TIMEOUT = 50000  # in milliseconds
 CORTEX_SEARCH_SERVICES = "AI.DWH_MART.ROC_SERVICE"
 SEMANTIC_MODEL = '@"AI"."DWH_MART"."PROCUREMENT_SEARCH"/procurement.yaml'
-
-# Initialize logging for debugging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
 
 # Streamlit Page Config
 st.set_page_config(
@@ -75,7 +69,7 @@ if "clear_conversation" not in st.session_state:
 if "rerun_trigger" not in st.session_state:
     st.session_state.rerun_trigger = False
 
-# Hide Streamlit branding, prevent chat history shading, and disable copy buttons/text boxes
+# Hide Streamlit branding
 st.markdown("""
 <style>
 #MainMenu, header, footer {visibility: hidden;}
@@ -94,23 +88,6 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Function to connect to Snowflake with retry logic
-@retrying.retry(stop_max_attempt_number=3, wait_fixed=2000, retry_on_exception=lambda e: isinstance(e, (snowflake.connector.errors.OperationalError,)))
-def connect_to_snowflake(username, password, account, host, warehouse, database, schema, role):
-    return snowflake.connector.connect(
-        user=username,
-        password=password,
-        account=account,
-        host=host,
-        port=443,
-        warehouse=warehouse,
-        role=role,
-        database=database,
-        schema=schema,
-        # Optional: Specify authenticator for SSO if needed
-        # authenticator="externalbrowser"  # Uncomment for SSO
-    )
-
 # Authentication logic
 if not st.session_state.authenticated:
     st.title("Welcome to Snowflake Cortex AI")
@@ -119,93 +96,50 @@ if not st.session_state.authenticated:
     st.session_state.username = st.text_input("Enter Snowflake Username:", value=st.session_state.username)
     st.session_state.password = st.text_input("Enter Password:", type="password")
 
-    # Option to show diagnostic information
-    if st.checkbox("Show connection diagnostics"):
-        st.write(f"**Host**: {HOST}")
-        st.write(f"**Account Identifier**: GBJYVCT-LSB50763")
-        st.write(f"**Warehouse**: AI")
-        st.write(f"**Database**: {DATABASE}")
-        st.write(f"**Schema**: {SCHEMA}")
-        st.write(f"**Role**: ACCOUNTADMIN")
-
     if st.button("Login"):
-        # Validate inputs
-        if not st.session_state.username or not st.session_state.password:
-            st.error("Please provide both username and password.")
-        else:
-            try:
-                # Use the correct account identifier
-                account_identifier = "GBJYVCT-LSB50763"
-                logger.info(f"Attempting Snowflake connection for user={st.session_state.username}, account={account_identifier}")
+        try:
+            # Use the correct account identifier (remove the host part from account)
+            account_identifier = "LSB50763"
+            conn = snowflake.connector.connect(
+                user=st.session_state.username,
+                password=st.session_state.password,
+                account=account_identifier,
+                host=HOST,
+                port=443,
+                warehouse="COMPUTE_WH",
+                role="ACCOUNTADMIN",
+                database=DATABASE,
+                schema=SCHEMA,
+            )
+            st.session_state.CONN = conn
 
-                # Connect with retry logic
-                conn = connect_to_snowflake(
-                    username=st.session_state.username,
-                    password=st.session_state.password,
-                    account=account_identifier,
-                    host=HOST,
-                    warehouse="COMPUTE_WH",
-                    database=DATABASE,
-                    schema=SCHEMA,
-                    role="ACCOUNTADMIN"
-                )
-                st.session_state.CONN = conn
+            # Create Snowpark session
+            snowpark_session = Session.builder.configs({
+                "connection": conn
+            }).create()
+            st.session_state.snowpark_session = snowpark_session
 
-                # Create Snowpark session
-                snowpark_session = Session.builder.configs({
-                    "connection": conn
-                }).create()
-                st.session_state.snowpark_session = snowpark_session
+            # Set session parameters
+            with conn.cursor() as cur:
+                cur.execute(f"USE DATABASE {DATABASE}")
+                cur.execute(f"USE SCHEMA {SCHEMA}")
+                cur.execute("ALTER SESSION SET TIMEZONE = 'UTC'")
+                cur.execute("ALTER SESSION SET QUOTED_IDENTIFIERS_IGNORE_CASE = TRUE")
 
-                # Set session parameters
-                with conn.cursor() as cur:
-                    cur.execute(f"USE DATABASE {DATABASE}")
-                    cur.execute(f"USE SCHEMA {SCHEMA}")
-                    cur.execute("ALTER SESSION SET TIMEZONE = 'UTC'")
-                    cur.execute("ALTER SESSION SET QUOTED_IDENTIFIERS_IGNORE_CASE = TRUE")
+            st.session_state.authenticated = True
+            st.success("Authentication successful! Redirecting...")
+            st.rerun()
 
-                st.session_state.authenticated = True
-                st.success("Authentication successful! Redirecting...")
-                logger.info("Snowflake authentication successful")
-                st.rerun()
-
-            except snowflake.connector.errors.DatabaseError as db_err:
-                logger.error(f"Database error: {str(db_err)}")
-                if "Incorrect username or password" in str(db_err):
-                    st.error("Authentication failed: Invalid username or password. Please try again.")
-                elif "Account is locked" in str(db_err):
-                    st.error("Authentication failed: Your account is locked. Contact your Snowflake administrator.")
-                else:
-                    st.error(f"Authentication failed: {str(db_err)}")
-            except snowflake.connector.errors.OperationalError as op_err:
-                logger.error(f"Operational error: {str(op_err)}")
-                if "250001" in str(op_err):
-                    st.error("Connection failed: Could not connect to Snowflake backend after multiple attempts. Please check the account URL, network connectivity, or contact your Snowflake administrator.")
-                    st.info("Suggestions:\n- Verify the account identifier (GBJYVCT-LSB50763) and host (GBJYVCT-LSB50763.snowflakecomputing.com).\n- Ensure port 443 is open and no firewall is blocking the connection.\n- Check Snowflake's status page for outages.")
-                elif "Connection refused" in str(op_err):
-                    st.error("Connection failed: Unable to reach Snowflake. Check network settings or account URL.")
-                else:
-                    st.error(f"Connection failed: {str(op_err)}")
-            except Exception as e:
-                logger.error(f"Unexpected error: {str(e)}")
-                st.error(f"Authentication failed: {str(e)}. Please check your credentials, account details, and network connectivity.")
+        except snowflake.connector.errors.DatabaseError as db_err:
+            st.error(f"Authentication failed: Invalid username or password. Please try again.")
+        except Exception as e:
+            st.error(f"Authentication failed: {str(e)}")
 
 else:
     session = st.session_state.snowpark_session
     root = Root(session)
 
-    if st.session_state.rerun_trigger:
-        st.session_state.rerun_trigger = False
-        st.rerun()
-
-    # Model options
-    MODELS = [
-        "mistral-large",
-        "snowflake-arctic",
-        "llama3-70b",
-        "llama3-8b",
-    ]
-
+    # Rest of the code remains unchanged
     def stream_text(text: str, chunk_size: int = 1, delay: float = 0.02):
         for i in range(0, len(text), chunk_size):
             yield text[i:i + chunk_size]
@@ -285,18 +219,20 @@ else:
 
     def make_chat_history_summary(chat_history, question):
         chat_history_str = "\n".join([f"{msg['role']}: {msg['content']}" for msg in chat_history])
-        prompt = f"""[INST]
-Based on the chat history below and the question, generate a query that extends the question
-with the chat history provided. The query should be in natural language.
-Answer with only the query. Do not add any explanation.
+        prompt = f"""
+            [INST]
+            Based on the chat history below and the question, generate a query that extends the question
+            with the chat history provided. The query should be in natural language.
+            Answer with only the query. Do not add any explanation.
 
-<chat_history>
-{chat_history_str}
-</chat_history>
-<question>
-{question}
-</question>
-[/INST]"""
+            <chat_history>
+            {chat_history_str}
+            </chat_history>
+            <question>
+            {question}
+            </question>
+            [/INST]
+        """
         summary = complete(st.session_state.model_name, prompt)
         return summary
 
@@ -317,28 +253,38 @@ Answer with only the query. Do not add any explanation.
         if not prompt_context.strip():
             return complete(st.session_state.model_name, user_question)
         
-        prompt = f"""[INST]
-You are a helpful AI chat assistant with RAG capabilities. When a user asks you a question,
-you will also be given context provided between <context> and </context> tags. Use that context
-with the user's chat history provided in the between <chat_history> and </chat_history> tags
-to provide a summary that addresses the user's question. Ensure the answer is coherent, concise,
-and directly relevant to the user's question.
+        prompt = f"""
+            [INST]
+            You are a helpful AI chat assistant with RAG capabilities. When a user asks you a question,
+            you will also be given context provided between <context> and </context> tags. Use that context
+            with the user's chat history provided in the between <chat_history> and </chat_history> tags
+            to provide a summary that addresses the user's question. Ensure the answer is coherent, concise,
+            and directly relevant to the user's question.
 
-If the user asks a generic question which cannot be answered with the given context or chat_history,
-just respond directly and concisely to the user's question using the LLM.
+            If the user asks a generic question which cannot be answered with the given context or chat_history,
+            just respond directly and concisely to the user's question using the LLM.
 
-<chat_history>
-{chat_history_str}
-</chat_history>
-<context>
-{prompt_context}
-</context>
-<question>
-{user_question}
-</question>
-[/INST]
-Answer:"""
+            <chat_history>
+            {chat_history_str}
+            </chat_history>
+            <context>
+            {prompt_context}
+            </context>
+            <question>
+            {user_question}
+            </question>
+            [/INST]
+            Answer:
+        """
         return complete(st.session_state.model_name, prompt)
+
+    # Model options
+    MODELS = [
+        "mistral-large",
+        "snowflake-arctic",
+        "llama3-70b",
+        "llama3-8b",
+    ]
 
     def run_snowflake_query(query):
         try:
