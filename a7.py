@@ -9,20 +9,84 @@ from snowflake.core import Root
 from typing import Any, Dict, List, Optional, Tuple
 import plotly.express as px
 import time
-import logging
-
-# Configure logging
-logging.basicConfig(level=logging.DEBUG)
-logger = logging.getLogger(__name__)
 
 # Snowflake/Cortex Configuration
-HOST = "lsb50763.snowflakecomputing.com"
+HOST = "GBJYVCT-LSB50763.snowflakecomputing.com"
 DATABASE = "AI"
 SCHEMA = "DWH_MART"
+STAGE = "PROCUREMENT_SEARCH"
 API_ENDPOINT = "/api/v2/cortex/agent:run"
 API_TIMEOUT = 50000  # in milliseconds
-CORTEX_SEARCH_SERVICES = "PROC_SERVICE"
+CORTEX_SEARCH_SERVICES = "AI.DWH_MART.ROC_SERVICE"
 SEMANTIC_MODEL = '@"AI"."DWH_MART"."PROCUREMENT_SEARCH"/procurement.yaml'
+
+# Streamlit Page Config
+st.set_page_config(
+    page_title="welcome to Cortex AI Assistant",
+    layout="wide",
+    initial_sidebar_state="auto"
+)
+
+# Initialize session state
+if "authenticated" not in st.session_state:
+    st.session_state.authenticated = False
+    st.session_state.username = ""
+    st.session_state.password = ""
+    st.session_state.CONN = None
+    st.session_state.snowpark_session = None
+if "debug_mode" not in st.session_state:
+    st.session_state.debug_mode = False
+
+# Hide Streamlit branding
+st.markdown("""
+<style>
+#MainMenu, header, footer {visibility: hidden;}
+</style>
+""", unsafe_allow_html=True)
+
+# Authentication logic
+if not st.session_state.authenticated:
+    st.title("Welcome to Snowflake Cortex AI ")
+    st.markdown("Please login to interact with your data")
+
+    st.session_state.username = st.text_input("Enter Snowflake Username:", value=st.session_state.username)
+    st.session_state.password = st.text_input("Enter Password:", type="password")
+
+    if st.button("Login"):
+        try:
+            conn = snowflake.connector.connect(
+                user=st.session_state.username,
+                password=st.session_state.password,
+                account="GBJYVCT-LSB50763",
+                host=HOST,
+                port=443,
+                warehouse="AI",
+                role="ACCOUNTADMIN",
+                database=DATABASE,
+                schema=SCHEMA,
+            )
+            st.session_state.CONN = conn
+
+            snowpark_session = Session.builder.configs({
+                "connection": conn
+            }).create()
+            st.session_state.snowpark_session = snowpark_session
+
+            with conn.cursor() as cur:
+                cur.execute(f"USE DATABASE {DATABASE}")
+                cur.execute(f"USE SCHEMA {SCHEMA}")
+                cur.execute("ALTER SESSION SET TIMEZONE = 'UTC'")
+                cur.execute("ALTER SESSION SET QUOTED_IDENTIFIERS_IGNORE_CASE = TRUE")
+
+            st.session_state.authenticated = True
+            st.success("Authentication successful! Redirecting...")
+            st.rerun()
+
+        except Exception as e:
+            st.error(f"Authentication failed: {e}")
+else:
+    session = st.session_state.snowpark_session
+
 
 # Model options
 MODELS = [
